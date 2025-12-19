@@ -136,17 +136,28 @@ func (t *CachedHFTokenizer) loadTokenizer(modelName string) (*tokenizers.Tokeniz
 		}
 	}
 
-	// 2. Try environment variable
+	// 2. Try environment variable TOKENIZER_PATH
 	if envPath := os.Getenv("TOKENIZER_PATH"); envPath != "" {
-		basePath := filepath.Join(envPath, modelName)
-		if stat, err := os.Stat(basePath); err == nil {
+		// First, try TOKENIZER_PATH as a direct tokenizer directory (default tokenizer for all models)
+		defaultTokenizerPath := filepath.Join(envPath, "tokenizer.json")
+		if _, err := os.Stat(defaultTokenizerPath); err == nil {
+			tokenizer, err := tokenizers.FromFile(defaultTokenizerPath)
+			if err == nil {
+				return tokenizer, nil
+			}
+			lastErr = fmt.Errorf("env path (default tokenizer) failed: %w", err)
+		}
+
+		// Second, try TOKENIZER_PATH as a root directory with model-specific subdirectories
+		modelPath := filepath.Join(envPath, modelName)
+		if stat, err := os.Stat(modelPath); err == nil {
 			var tokenizerPath string
 			if stat.IsDir() {
 				// If it's a directory, look for tokenizer.json inside it
-				tokenizerPath = filepath.Join(basePath, "tokenizer.json")
+				tokenizerPath = filepath.Join(modelPath, "tokenizer.json")
 			} else {
 				// If it's a file, use it directly
-				tokenizerPath = basePath
+				tokenizerPath = modelPath
 			}
 
 			if _, err := os.Stat(tokenizerPath); err == nil {
@@ -154,9 +165,9 @@ func (t *CachedHFTokenizer) loadTokenizer(modelName string) (*tokenizers.Tokeniz
 				if err == nil {
 					return tokenizer, nil
 				}
-				lastErr = fmt.Errorf("env path failed: %w", err)
+				lastErr = fmt.Errorf("env path (model-specific) failed: %w", err)
 			} else {
-				lastErr = fmt.Errorf("env path failed: tokenizer.json not found in directory %s", basePath)
+				lastErr = fmt.Errorf("env path failed: tokenizer.json not found in directory %s", modelPath)
 			}
 		}
 	}
