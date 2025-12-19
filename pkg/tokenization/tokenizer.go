@@ -18,6 +18,7 @@ package tokenization
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"runtime"
 
@@ -87,7 +88,7 @@ func (t *CachedHFTokenizer) getTokenizer(modelName string) (*tokenizers.Tokenize
 	tokenizer, ok := t.cache.Get(modelName)
 	if !ok {
 		result, err, shared := t.group.Do(modelName, func() (any, error) {
-			return tokenizers.FromPretrained(modelName, t.cfg)
+			return t.loadTokenizer(modelName)
 		})
 		if err != nil {
 			return nil, err
@@ -103,6 +104,55 @@ func (t *CachedHFTokenizer) getTokenizer(modelName string) (*tokenizers.Tokenize
 			t.cache.Add(modelName, tokenizer)
 		}
 	}
+	return tokenizer, nil
+}
+
+// loadTokenizer attempts to load a tokenizer from multiple sources in order:
+// 1. Local path (if modelName is a valid file path)
+// 2. Environment variable TOKENIZER_PATH
+// 3. HuggingFace (using FromPretrained)
+func (t *CachedHFTokenizer) loadTokenizer(modelName string) (*tokenizers.Tokenizer, error) {
+	var lastErr error
+
+	// 1. Try local path - check if modelName is a valid local file path
+	if _, err := os.Stat(modelName); err == nil {
+		tokenizer, err := tokenizers.FromFile(modelName)
+		if err == nil {
+			return tokenizer, nil
+		}
+		lastErr = fmt.Errorf("local path failed: %w", err)
+	}
+
+	// 2. Try environment variable
+	if envPath := os.Getenv("TOKENIZER_PATH"); envPath != "" {
+		tokenizerPath := filepath.Join(envPath, modelName)
+		if _, err := os.Stat(tokenizerPath); err == nil {
+			tokenizer, err := tokenizers.FromFile(tokenizerPath)
+			if err == nil {
+				return tokenizer, nil
+			}
+			lastErr = fmt.Errorf("env path failed: %w", err)
+		}
+		// Also try the env path directly with "tokenizer.json" suffix
+		tokenizerJSONPath := filepath.Join(envPath, modelName, "tokenizer.json")
+		if _, err := os.Stat(tokenizerJSONPath); err == nil {
+			tokenizer, err := tokenizers.FromFile(tokenizerJSONPath)
+			if err == nil {
+				return tokenizer, nil
+			}
+			lastErr = fmt.Errorf("env path (tokenizer.json) failed: %w", err)
+		}
+	}
+
+	// 3. Try HuggingFace
+	tokenizer, err := tokenizers.FromPretrained(modelName, t.cfg)
+	if err != nil {
+		if lastErr != nil {
+			return nil, fmt.Errorf("all sources failed - HF: %w, previous: %v", err, lastErr)
+		}
+		return nil, fmt.Errorf("HuggingFace load failed: %w", err)
+	}
+
 	return tokenizer, nil
 }
 
